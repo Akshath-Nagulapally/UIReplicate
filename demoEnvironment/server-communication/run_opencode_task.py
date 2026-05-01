@@ -21,6 +21,8 @@ DEFAULT_CLEANUP_PORTS = (4096, 5173, 5174, 3000, 3001, 8000, 8080)
 DEFAULT_TIMEOUT_SECONDS = 450
 APP_DIR = Path(__file__).resolve().parents[1] / "my-app"
 DEFAULT_SCREENSHOT_PATH = Path("screenshots") / "opencode-task.png"
+AI_GENERATED_SCREENSHOT_PATH = Path("screenshots") / "ai-generated-screenshot.png"
+LOCAL_APP_URL = "http://localhost:5173"
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -58,6 +60,38 @@ def unique_ports(ports: Iterable[int]) -> list[int]:
 
 def default_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def start_dev_server(directory: Path) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        ["bun", "run", "dev"],
+        cwd=directory,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+
+def wait_for_url(url: str, *, timeout: float = 30.0) -> None:
+    deadline = time.time() + timeout
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2):
+                return
+        except Exception as error:
+            last_error = error
+            time.sleep(0.25)
+    raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
+
+
+def stop_dev_server(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def kill_listeners_on_ports(ports: Iterable[int], *, runner: Runner = default_runner) -> list[int]:
@@ -216,7 +250,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         screenshot_path = capture_screenshot(args.url, DEFAULT_SCREENSHOT_PATH)
-        response = run_task(args.task, screenshot_path=screenshot_path, base_url=base_url, directory=directory, timeout=timeout)
+
+        # Temporarily disabled while testing the screenshot pipeline without model calls.
+        # response = run_task(args.task, screenshot_path=screenshot_path, base_url=base_url, directory=directory, timeout=timeout)
+        response = {"opencode_skipped": True, "task": args.task, "reference_screenshot": str(screenshot_path)}
+
+        dev_server = start_dev_server(directory)
+        try:
+            wait_for_url(LOCAL_APP_URL)
+            generated_screenshot_path = capture_screenshot(LOCAL_APP_URL, AI_GENERATED_SCREENSHOT_PATH)
+        finally:
+            stop_dev_server(dev_server)
+        response["ai_generated_screenshot"] = str(generated_screenshot_path)
     except Exception as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

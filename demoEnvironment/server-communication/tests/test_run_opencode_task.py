@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "run_opencode_task.py"
@@ -87,38 +87,53 @@ class RunOpencodeTaskTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         self.assertIn("--url", stderr.getvalue())
 
-    def test_main_sends_task_and_screenshot_to_opencode(self):
+    def test_main_skips_opencode_and_captures_generated_screenshot(self):
         module = load_module()
         stdout = io.StringIO()
-        screenshot_path = Path("screenshots") / "opencode-task.png"
+        reference_screenshot_path = Path("screenshots") / "opencode-task.png"
+        generated_screenshot_path = Path("screenshots") / "ai-generated-screenshot.png"
+        dev_server = Mock()
 
-        with patch.object(module, "capture_screenshot", return_value=screenshot_path):
+        with patch.object(module, "capture_screenshot", side_effect=[reference_screenshot_path, generated_screenshot_path]) as capture_screenshot:
             with patch.object(module, "run_task", return_value={"ok": True}) as run_task:
-                with patch.object(module.sys, "stdout", stdout):
-                    exit_code = module.main(["build the app", "--url", "localhost:5173"])
+                with patch.object(module, "start_dev_server", return_value=dev_server) as start_dev_server:
+                    with patch.object(module, "wait_for_url") as wait_for_url:
+                        with patch.object(module.sys, "stdout", stdout):
+                            exit_code = module.main(["build the app", "--url", "localhost:5173"])
 
         self.assertEqual(exit_code, 0)
-        run_task.assert_called_once()
-        self.assertEqual(run_task.call_args.args, ("build the app",))
-        self.assertEqual(run_task.call_args.kwargs["screenshot_path"], screenshot_path)
-        self.assertIn('"ok": true', stdout.getvalue())
+        run_task.assert_not_called()
+        start_dev_server.assert_called_once_with(module.APP_DIR)
+        wait_for_url.assert_called_once_with("http://localhost:5173")
+        self.assertEqual(
+            capture_screenshot.call_args_list,
+            [
+                unittest.mock.call("localhost:5173", reference_screenshot_path),
+                unittest.mock.call("http://localhost:5173", module.AI_GENERATED_SCREENSHOT_PATH),
+            ],
+        )
+        dev_server.terminate.assert_called_once()
+        dev_server.wait.assert_called_once_with(timeout=5)
+        self.assertIn('"opencode_skipped": true', stdout.getvalue())
+        self.assertIn(str(generated_screenshot_path), stdout.getvalue())
 
     def test_main_captures_url_screenshot_before_sending_task(self):
         module = load_module()
         stdout = io.StringIO()
         screenshot_path = Path("screenshots") / "opencode-task.png"
+        dev_server = Mock()
 
-        with patch.object(module, "capture_screenshot", return_value=screenshot_path) as capture_screenshot:
+        with patch.object(module, "capture_screenshot", side_effect=[screenshot_path, module.AI_GENERATED_SCREENSHOT_PATH]) as capture_screenshot:
             with patch.object(module, "run_task", return_value={"ok": True}) as run_task:
-                with patch.object(module.sys, "stdout", stdout):
-                    exit_code = module.main(["build the app", "--url", "localhost:5173"])
+                with patch.object(module, "start_dev_server", return_value=dev_server):
+                    with patch.object(module, "wait_for_url"):
+                        with patch.object(module.sys, "stdout", stdout):
+                            exit_code = module.main(["build the app", "--url", "localhost:5173"])
 
         self.assertEqual(exit_code, 0)
-        capture_screenshot.assert_called_once_with("localhost:5173", screenshot_path)
-        run_task.assert_called_once()
-        self.assertEqual(run_task.call_args.args, ("build the app",))
-        self.assertEqual(run_task.call_args.kwargs["screenshot_path"], screenshot_path)
-        self.assertIn('"ok": true', stdout.getvalue())
+        self.assertEqual(capture_screenshot.call_args_list[0], unittest.mock.call("localhost:5173", screenshot_path))
+        run_task.assert_not_called()
+        self.assertIn('"reference_screenshot"', stdout.getvalue())
 
 
 if __name__ == "__main__":
