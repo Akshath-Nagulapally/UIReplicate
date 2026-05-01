@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import mimetypes
 import os
 import shutil
 import signal
@@ -19,13 +20,30 @@ DEFAULT_OPENCODE_URL = "http://127.0.0.1:4096"
 DEFAULT_CLEANUP_PORTS = (4096, 5173, 5174, 3000, 3001, 8000, 8080)
 DEFAULT_TIMEOUT_SECONDS = 450
 APP_DIR = Path(__file__).resolve().parents[1] / "my-app"
+DEFAULT_SCREENSHOT_PATH = Path("screenshots") / "opencode-task.png"
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from screenshot import capture_screenshot
 
 
 Runner = Callable[[list[str]], object]
 
 
-def build_message_payload(task: str) -> dict[str, Any]:
-    return {"parts": [{"type": "text", "text": task}]}
+def build_message_payload(task: str, *, screenshot_path: Path) -> dict[str, Any]:
+    parts = [{"type": "text", "text": task}]
+    parts.append({"type": "file", "mime": image_mime_type(screenshot_path), "url": image_data_url(screenshot_path)})
+    return {"parts": parts}
+
+
+def image_mime_type(image_path: Path) -> str:
+    return mimetypes.guess_type(image_path.name)[0] or "image/png"
+
+
+def image_data_url(image_path: Path) -> str:
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{image_mime_type(image_path)};base64,{encoded}"
 
 
 def unique_ports(ports: Iterable[int]) -> list[int]:
@@ -145,6 +163,7 @@ def build_headers(directory: Path) -> dict[str, str]:
 def run_task(
     task: str,
     *,
+    screenshot_path: Path,
     base_url: str = DEFAULT_OPENCODE_URL,
     directory: Path = APP_DIR,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -160,7 +179,7 @@ def run_task(
         response = request_json(
             "POST",
             f"{base_url}/session/{session_id}/message",
-            payload=build_message_payload(task),
+            payload=build_message_payload(task, screenshot_path=screenshot_path),
             directory=directory,
             timeout=timeout,
         )
@@ -185,6 +204,7 @@ def safe_request(method: str, url: str, *, directory: Path, timeout: int) -> Non
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send one task to OpenCode, then clean up local dev servers.")
     parser.add_argument("task", help="Task prompt to send to OpenCode")
+    parser.add_argument("--url", required=True, help="URL to screenshot and attach to the OpenCode task")
     return parser.parse_args(argv)
 
 
@@ -195,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
     directory = Path(os.environ.get("OPENCODE_APP_DIR", str(APP_DIR))).expanduser().resolve()
 
     try:
-        response = run_task(args.task, base_url=base_url, directory=directory, timeout=timeout)
+        screenshot_path = capture_screenshot(args.url, DEFAULT_SCREENSHOT_PATH)
+        response = run_task(args.task, screenshot_path=screenshot_path, base_url=base_url, directory=directory, timeout=timeout)
     except Exception as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

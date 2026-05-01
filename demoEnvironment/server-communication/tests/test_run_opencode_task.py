@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -26,12 +27,23 @@ class RunOpencodeTaskTests(unittest.TestCase):
 
         self.assertEqual(module.DEFAULT_TIMEOUT_SECONDS, 450)
 
-    def test_build_message_payload_uses_single_text_part(self):
+    def test_build_message_payload_includes_png_screenshot_part(self):
         module = load_module()
 
-        payload = module.build_message_payload("build the app")
+        with tempfile.TemporaryDirectory() as tmp:
+            screenshot_path = Path(tmp) / "screenshot.png"
+            screenshot_path.write_bytes(b"png-bytes")
 
-        self.assertEqual(payload, {"parts": [{"type": "text", "text": "build the app"}]})
+            payload = module.build_message_payload("build the app", screenshot_path=screenshot_path)
+
+        self.assertEqual(payload["parts"][0], {"type": "text", "text": "build the app"})
+        self.assertEqual(payload["parts"][1], {"type": "file", "mime": "image/png", "url": "data:image/png;base64,cG5nLWJ5dGVz"})
+
+    def test_build_message_payload_requires_screenshot_path(self):
+        module = load_module()
+
+        with self.assertRaises(TypeError):
+            module.build_message_payload("build the app")
 
     def test_cleanup_ports_deduplicates_requested_ports(self):
         module = load_module()
@@ -64,17 +76,48 @@ class RunOpencodeTaskTests(unittest.TestCase):
         self.assertEqual(killed, [5173])
         self.assertEqual(calls, [["lsof", "-tiTCP:5173", "-sTCP:LISTEN"]])
 
-    def test_main_sends_task_to_opencode(self):
+    def test_main_requires_url(self):
+        module = load_module()
+        stderr = io.StringIO()
+
+        with patch.object(module.sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as error:
+                module.main(["build the app"])
+
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("--url", stderr.getvalue())
+
+    def test_main_sends_task_and_screenshot_to_opencode(self):
         module = load_module()
         stdout = io.StringIO()
+        screenshot_path = Path("screenshots") / "opencode-task.png"
 
-        with patch.object(module, "run_task", return_value={"ok": True}) as run_task:
-            with patch.object(module.sys, "stdout", stdout):
-                exit_code = module.main(["build the app"])
+        with patch.object(module, "capture_screenshot", return_value=screenshot_path):
+            with patch.object(module, "run_task", return_value={"ok": True}) as run_task:
+                with patch.object(module.sys, "stdout", stdout):
+                    exit_code = module.main(["build the app", "--url", "localhost:5173"])
 
         self.assertEqual(exit_code, 0)
         run_task.assert_called_once()
         self.assertEqual(run_task.call_args.args, ("build the app",))
+        self.assertEqual(run_task.call_args.kwargs["screenshot_path"], screenshot_path)
+        self.assertIn('"ok": true', stdout.getvalue())
+
+    def test_main_captures_url_screenshot_before_sending_task(self):
+        module = load_module()
+        stdout = io.StringIO()
+        screenshot_path = Path("screenshots") / "opencode-task.png"
+
+        with patch.object(module, "capture_screenshot", return_value=screenshot_path) as capture_screenshot:
+            with patch.object(module, "run_task", return_value={"ok": True}) as run_task:
+                with patch.object(module.sys, "stdout", stdout):
+                    exit_code = module.main(["build the app", "--url", "localhost:5173"])
+
+        self.assertEqual(exit_code, 0)
+        capture_screenshot.assert_called_once_with("localhost:5173", screenshot_path)
+        run_task.assert_called_once()
+        self.assertEqual(run_task.call_args.args, ("build the app",))
+        self.assertEqual(run_task.call_args.kwargs["screenshot_path"], screenshot_path)
         self.assertIn('"ok": true', stdout.getvalue())
 
 

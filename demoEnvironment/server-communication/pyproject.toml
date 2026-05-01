@@ -3,4 +3,6 @@ name = "server-communication"
 version = "0.1.0"
 description = "OpenCode server communication helpers for the demo environment"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "playwright>=1.59.0",
+]
