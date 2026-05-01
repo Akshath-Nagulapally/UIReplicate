@@ -1,0 +1,61 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {
+      "tinker": {
+        "env": ["TINKER_API_KEY"],
+        "npm": "@ai-sdk/openai-compatible",
+        "models": {
+          "Qwen/Qwen3.6-27B": {
+            "name": "Qwen3.6 27B",
+            "attachment": false,
+            "reasoning": true,
+            "temperature": true,
+            "tool_call": true,
+            "cost": {
+              "input": 0,
+              "output": 0
+            },
+            "limit": {
+              "context": 131072,
+              "output": 8192
+            }
+          }
+        },
+        "options": {
+          "baseURL": "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+          "apiKey": "{env:TINKER_API_KEY}"
+        }
+      },
+      "openrouter": {
+        "env": ["OPENROUTER_API_KEY"],
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "OpenRouter",
+        "models": {
+          "qwen/qwen3.6-27b": {
+            "name": "Qwen3.6 27B",
+            "attachment": true,
+            "reasoning": true,
+            "temperature": true,
+            "tool_call": true,
+            "modalities": {
+              "input": ["text", "image"],
+              "output": ["text"]
+            },
+            "cost": {
+              "input": 0.325,
+              "output": 3.25
+            },
+            "limit": {
+              "context": 262144,
+              "output": 2048
+            }
+          }
+        },
+        "options": {
+          "baseURL": "https://openrouter.ai/api/v1",
+          "apiKey": "{env:OPENROUTER_API_KEY}"
+        }
+      }
+    },
+    "model": "openrouter/qwen/qwen3.6-27b"
+  }
